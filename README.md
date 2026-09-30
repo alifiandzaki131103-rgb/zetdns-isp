@@ -268,6 +268,11 @@ systemctl restart nginx     # restart, bukan reload — default_server baru butu
 
 ### Langkah 5 — arahkan domain blokir ke IP server
 
+**Cara 1 — dashboard (disarankan):** login, buka menu **Block page**, isi IP server,
+simpan. Dashboard menulis `lamanlabuh.conf` dan reload unbound sendiri.
+
+**Cara 2 — manual:**
+
 ```bash
 IP=10.0.0.53   # ganti dengan IP server ini
 sed -i "s|\"blacklist\. 60 IN A [0-9.]*\"|\"blacklist. 60 IN A $IP\"|" /etc/unbound/lamanlabuh.conf
@@ -300,7 +305,19 @@ curl -sS -H 'Host: situsblokir.com' http://127.0.0.1/ | grep -o '<title>[^<]*</t
 
 ## Konfigurasi ACL
 
-ACL ada di `/etc/unbound/unbound.conf`, **tidak dikelola dashboard** — edit manual.
+ACL tersimpan di `/etc/unbound/unbound.conf`. **Dikelola dari dashboard** —
+menu **Client access** (judul halaman: *Recursive clients*, overline: *Network access*).
+
+| Cara | Kapan dipakai |
+|---|---|
+| **Dashboard → Client access** | Cara normal. Validasi CIDR, backup, apply, rollback otomatis |
+| **Edit manual** `unbound.conf` | Dashboard mati, atau perubahan massal lewat skrip |
+
+Dashboard membaca seluruh baris `access-control` dari `unbound.conf`, menampilkan
+sebagai daftar jaringan, dan menulis ulang saat kamu simpan. Ada validasi
+("ACL %q bukan IP/CIDR valid", maks 100 jaringan) dan rollback kalau reload gagal
+("reload dashboard gagal; konfigurasi lama dipulihkan").
+
 Default repo menolak semua kecuali jaringan privat:
 
 ```
@@ -316,7 +333,12 @@ access-control: 0.0.0.0/0 refuse
 **Jangan** membuka `0.0.0.0/0 allow` — server jadi open resolver,
 bahan DDoS amplification, dan IP-mu bisa masuk blocklist.
 
-Tambahkan **hanya** jaringan yang kamu butuhkan, tepat **sebelum** baris `refuse`:
+**Cara 1 — dashboard (disarankan):** login ke `https://<IP>:9080`, buka
+**Client access**, tambah CIDR, simpan. Dashboard memvalidasi, membackup, apply,
+dan rollback kalau gagal. Maks 100 jaringan, format IPv4/CIDR.
+
+**Cara 2 — manual**, kalau dashboard tidak bisa dipakai. Tambahkan **hanya**
+jaringan yang kamu butuhkan, tepat **sebelum** baris `refuse`:
 
 ```
 access-control: 103.180.118.0/23 allow
@@ -417,6 +439,27 @@ curl -sSL https://lamanlabuh.ispku.id/ -o /tmp/orig.html
 
 ## Operasi harian
 
+### Menu dashboard (apa yang dikelola dari UI)
+
+Dashboard `dnstrust-admin` di `https://<IP>:9080` mengelola hampir semua config.
+Ini memetakan menu ke file di baliknya:
+
+| Menu dashboard | Page header | File yang dikelola |
+|---|---|---|
+| **Client access** | *Recursive clients* | `/etc/unbound/unbound.conf` (baris `access-control`) |
+| **Local DNS records** | *Local DNS records* | `/etc/unbound/hosts.conf` (maks 1000 record) |
+| **Block page** | *IP halaman blokir* | `/etc/unbound/lamanlabuh.conf` (1–8 alamat) |
+| **Whitelist** | *Whitelist* | `/etc/unbound/whitelist.conf` (maks 5000 domain) |
+| **SafeSearch** | *SafeSearch* | `/etc/unbound/safesearch.conf` + `rpz.safesearch` |
+| **DNS options** | *DNS options* | `/etc/unbound/module-config.conf`, TPROXY |
+| **Setting** | *Settings* | `/etc/dnstrust-admin/config.json`, jadwal updater, password |
+
+**Penting:** semua menu di atas **menulis ulang file-nya sendiri** saat kamu
+simpan. Kalau kamu edit manual lalu simpan dari dashboard, perubahan manualmu
+tertimpa. Backup otomatis ada di `/var/lib/dnstrust-admin/backups/`.
+
+Untuk setup baru, lebih rapi lewat dashboard daripada edit file langsung.
+
 ### Service & timer
 
 ```bash
@@ -452,8 +495,6 @@ refresh | stats | stats_noreset | status | uptime
 ```bash
 /usr/local/sbin/dnstrust-control stats_noreset | grep -E '^total\.num\.'
 ```
-
-Angka penting:
 
 ```
 total.num.queries            total query
@@ -575,7 +616,11 @@ Hal-hal yang memakan waktu saat instalasi pertama:
 4. **nginx butuh `restart`, bukan `reload`**, saat mengubah `default_server`.
    Reload tidak mengganti vhost default.
 
-5. **ACL tidak dikelola dashboard.** Edit manual + `unbound-checkconf` + reload.
+5. **Dashboard punya menu "Client access" untuk ACL.** Pakai itu untuk perubahan
+   normal; edit manual `unbound.conf` hanya kalau dashboard mati. Kalau kamu
+   edit manual lalu simpan dari dashboard, **perubahan manualmu bisa tertimpa** —
+   dashboard menulis ulang seluruh blok `access-control` dari state internalnya.
+   Backup dashboard ada di `/var/lib/dnstrust-admin/backups/`.
 
 6. **Klien harus diarahkan ke resolver.** Install di server tidak otomatis
    mengganti DNS pelanggan. Set lewat DHCP router/PPPoE pool.
@@ -584,9 +629,11 @@ Hal-hal yang memakan waktu saat instalasi pertama:
    `# --- BEGIN PVE ---`, perubahan bisa hilang saat restart. Ubah permanen dari
    host: `pct set <vmid> --nameserver 127.0.0.1`.
 
-8. **Dashboard bisa menimpa `lamanlabuh.conf`.** Menu "Block response" di
-   dashboard menulis file yang sama. Kalau kamu simpan dari dashboard,
-   konfigurasi manual bisa kembali ke `127.0.0.1`.
+8. **Dashboard menulis ulang config saat kamu simpan.** Menu **Block page**,
+   **Client access**, **Local DNS records**, **Whitelist** semuanya menulis file
+   masing-masing. Setelah `install-lamanlabuh.sh` mengubah `lamanlabuh.conf`,
+   kalau kamu buka **Block page** di dashboard dan simpan, nilai manual bisa
+   tergantikan. Backup otomatis di `/var/lib/dnstrust-admin/backups/`.
 
 9. **Dashboard :9080 terbuka publik dengan self-signed cert.** Taruh di belakang
    nginx + Let's Encrypt, atau batasi firewall ke IP admin.
