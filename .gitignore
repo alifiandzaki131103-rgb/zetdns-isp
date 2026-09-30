@@ -1,0 +1,27 @@
+# Rahasia — jangan pernah commit
+*.key
+*.crt
+*.pem
+config.json
+session_key*
+
+# Backup lokal
+*.before-*
+*.bak
+*~
+
+# Data CDB / daftar domain (ratusan MB, tidak boleh masuk git)
+blacklist.db*
+trust.txt*
+trust.txt.raw
+rpz.safesearch
+*.cdb
+
+# Log & runtime
+*.log
+run/
+metrics.db*
+
+# Sistem
+.DS_Store
+Thumbs.db

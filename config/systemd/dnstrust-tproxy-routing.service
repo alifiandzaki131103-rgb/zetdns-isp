@@ -1,0 +1,12 @@
+[Unit]
+Description=DNS Trust TPROXY policy routing
+Before=dnstrust-unbound.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '/usr/sbin/ip rule add fwmark 0x1 lookup 100 2>/dev/null || true; /usr/sbin/ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true'
+ExecStop=/bin/sh -c '/usr/sbin/ip rule del fwmark 0x1 lookup 100 2>/dev/null || true; /usr/sbin/ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target
