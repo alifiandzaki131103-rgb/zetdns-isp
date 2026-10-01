@@ -1,16 +1,22 @@
+# PENTING: src/bin/* TIDAK diabaikan.
+# Binary sengaja diikutkan supaya repo self-contained (opsi A).
+# Cuma ~26 MB, dan itu inti fitur CDB.
+
 # Rahasia — jangan pernah commit
 *.key
 *.crt
 *.pem
 config.json
 session_key*
+*password*
+*secret*
 
 # Backup lokal
 *.before-*
 *.bak
 *~
 
-# Data CDB / daftar domain (ratusan MB, tidak boleh masuk git)
+# Data CDB / daftar domain (ratusan MB, jangan masuk git)
 blacklist.db*
 trust.txt*
 trust.txt.raw

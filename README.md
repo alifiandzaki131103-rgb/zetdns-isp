@@ -3,9 +3,10 @@
 Instalasi produksi **ZetDNS** ([zet-dns](https://github.com/niammuddin/zet-dns)) di server ISP, lengkap dengan
 **halaman blokir (laman labuh)** yang identik dengan `https://lamanlabuh.ispku.id/`.
 
-Repo ini adalah **salinan penuh** dari instalasi yang sudah terbukti jalan di produksi
-(2026-09-30, `49.0.27.27`, Debian 12, x86_64), jadi kamu bisa mereplikasinya di server
-baru tanpa menebak-nebak konfigurasi.
+Repo ini adalah **salinan penuh** — konfigurasi **dan binary** sudah disertakan.
+Satu `git clone`, tidak perlu mengambil apa pun dari repo lain.
+
+Cukup 27 MB (binary 26 MB + config).
 
 ---
 
@@ -146,127 +147,159 @@ tapi **tidak dipakai**; binary patched jalan sendiri dari `/usr/local/sbin`.
 
 ## Instalasi cepat
 
-### 1. Siapkan server
+Satu perintah. Repo ini sudah berisi binary, jadi tidak perlu clone repo lain.
 
 ```bash
-apt-get update
-apt-get install -y git curl ca-certificates nginx unbound-anchor
-```
-
-### 2. Clone repo asli + repo ini
-
-```bash
-git clone https://github.com/niammuddin/zet-dns /root/zet-dns
-git clone <URL-repo-ini> /root/zetdns-isp
-```
-
-### 3. Jalankan installer zet-dns
-
-`install.sh` meminta password dashboard lewat `stty -echo`, jadi butuh PTY:
-
-```bash
-cd /root/zet-dns
-printf '%s\n' 'GANTI_PASSWORD_INI' | script -qec "./install.sh" /tmp/zetdns-install.log
-echo "EXIT=$?"
-```
-
-Harus `EXIT=0` dalam beberapa detik.
-
-### 4. Terapkan config dari repo ini
-
-```bash
+git clone https://github.com/alifiandzaki131103-rgb/zetdns-isp /root/zetdns-isp
 cd /root/zetdns-isp
-sudo ./install-lamanlabuh.sh --dns-ip 10.0.0.53
+sudo ./install.sh --dashboard-password 'PASSWORD_KUAT_MIN_12_KARAKTER'
 ```
 
-Script ini:
-- install nginx vhost `default_server` catch-all
-- pasang halaman laman labuh ke `/var/www/lamanlabuh/index.html`
-- set `lamanlabuh.conf` agar domain blokir diarahkan ke `--dns-ip`
-- validasi + reload unbound dan nginx
-- verifikasi end-to-end
+Installer mengerjakan semuanya: pasang binary, config, systemd unit, halaman
+blokir, nginx, nyalakan service — lalu **memverifikasi bahwa dashboard
+benar-benar merespons** (`OK dashboard merespons (http=303)`).
 
-### 5. Tarik daftar Komdigi pertama kali
+Setelah itu **wajib** dua langkah:
 
 ```bash
-systemctl start unbound-blacklist-update.service
-journalctl -u unbound-blacklist-update -f
+# 1. tarik daftar Komdigi pertama kali (~70 detik, CDB 461 MB)
+sudo systemctl start unbound-blacklist-update.service
+sudo journalctl -u unbound-blacklist-update -f
+
+# 2. verifikasi end-to-end (16 pemeriksaan)
+sudo ./verify.sh
 ```
 
-Tunggu ~70 detik. Tanda sukses:
+Hasil yang diharapkan:
 
 ```
-blacklist activated: raw=9752845 active=9752802 rejected=43 duplicates=0
-health check passed: 0--0--1-com.pages.dev -> 127.0.0.1
+LULUS: 16   GAGAL: 0
+SEMUA BAIK
 ```
 
-### 6. Verifikasi
+Terakhir, arahkan DNS pelanggan ke IP server (DHCP/PPPoE pool), lalu tambahkan
+jaringan pelanggan di dashboard → menu **Client access**.
 
-```bash
-# blokir -> IP server
-dig @127.0.0.1 0--0--1-com.pages.dev A +short
-# harus: <IP server>
+### Opsi installer
 
-# domain normal
-dig @127.0.0.1 google.com A +short
-# harus: IP Google asli, bukan IP server
+| Opsi | Guna |
+|---|---|
+| `--dashboard-password 'X'` | Set password dashboard (min 12 karakter) |
+| `--block-ip 10.0.0.53` | IP tujuan halaman blokir (default: deteksi otomatis) |
+| `--document-root /path` | Lokasi halaman blokir (default `/var/www/lamanlabuh`) |
+| `--skip-dns` | Hanya halaman blokir, jangan sentuh DNS |
+| `--skip-page` | Hanya DNS, jangan pasang halaman blokir |
 
-# resolver rekursif sendiri (bukan forwarder)
-dig @127.0.0.1 whoami.akamai.net A +short
-# harus: IP publik server ini
-
-# halaman blokir
-curl -sS -H 'Host: situsblokir.com' http://127.0.0.1/ | grep -o '<title>[^<]*</title>'
-# harus: <title>Landing Page Trustpositif</title>
-```
+Semua file yang ditimpa dibackup ke `/root/zetdns-backups/` sebelum diubah.
+Installer **idempoten** — aman dijalankan berulang.
 
 ---
 
 ## Instalasi manual (langkah demi langkah)
 
-Kalau `install-lamanlabuh.sh` gagal, atau kamu ingin kontrol penuh:
+Kalau `install.sh` gagal, atau kamu ingin kontrol penuh:
 
-### Langkah 1 — installer zet-dns
+### Langkah 1 — cek arsitektur
 
 ```bash
-cd /root/zet-dns
-printf '%s\n' 'PASSWORDMU' | script -qec "./install.sh" /tmp/zetdns-install.log
-cat /tmp/zetdns-install.log | tr -d '\r' | grep -vE '^$' | tail -40
+uname -m    # harus x86_64
 ```
 
-### Langkah 2 — matikan systemd-resolved (kalau ada)
+Binary di repo ini **hanya x86_64**. Tidak ada rilis untuk arm64.
+
+### Langkah 2 — pasang binary
+
+```bash
+cd /root/zetdns-isp
+sudo install -m 0755 src/bin/unbound            /usr/local/sbin/unbound
+sudo install -m 0755 src/bin/unbound-control    /usr/local/sbin/unbound-control
+sudo install -m 0755 src/bin/unbound-checkconf  /usr/local/sbin/unbound-checkconf
+sudo install -m 0755 src/bin/dnstrust-admin     /usr/local/sbin/dnstrust-admin
+sudo install -m 0644 src/bin/libcdb.so.1        /usr/local/lib/libcdb.so.1
+sudo install -m 0755 src/bin/blcreate           /usr/local/bin/blcreate
+sudo install -m 0755 src/scripts/dnstrust-control /usr/local/sbin/dnstrust-control
+sudo install -m 0755 src/scripts/update-blacklist.sh /usr/local/sbin/update-dnstrust-blacklist
+sudo install -m 0755 src/scripts/verify-dnstrust-hot-remap /usr/local/sbin/verify-dnstrust-hot-remap
+sudo ldconfig
+
+# bukti patch CDB ada (WAJIB — tanpa ini CDB tidak terbaca)
+strings /usr/local/sbin/unbound | grep -c filter-database    # harus > 0
+/usr/local/sbin/unbound -V | head -1
+```
+
+### Langkah 3 — user, group, dan ownership
+
+**Ini bagian paling mudah salah.** Ada **dua** user terpisah:
+
+| User | Dipakai oleh | Direktori |
+|---|---|---|
+| `dnstrust` | `dnstrust-unbound.service` | `/var/lib/dnstrust` |
+| `dnstrust-admin` | `dnstrust-admin.service` | `/var/lib/dnstrust-admin` |
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin dnstrust 2>/dev/null || true
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin dnstrust-admin 2>/dev/null || true
+
+sudo mkdir -p /var/lib/dnstrust /var/lib/dnstrust-admin/{actions,queue,backups}
+
+sudo chown dnstrust:dnstrust        /var/lib/dnstrust
+sudo chmod 750                      /var/lib/dnstrust
+sudo chown root:dnstrust-admin      /var/lib/dnstrust-admin
+sudo chmod 770                      /var/lib/dnstrust-admin
+sudo chown -R root:dnstrust-admin   /var/lib/dnstrust-admin/
+sudo chmod -R 770                   /var/lib/dnstrust-admin/actions \
+                                    /var/lib/dnstrust-admin/queue \
+                                    /var/lib/dnstrust-admin/backups
+```
+
+### Langkah 4 — matikan systemd-resolved (kalau ada)
 
 ```bash
 systemctl disable --now systemd-resolved 2>/dev/null || true
 ```
 
-### Langkah 3 — root trust anchor
+### Langkah 5 — root trust anchor
 
 ```bash
 unbound-anchor -a /var/lib/dnstrust/root.key 2>/dev/null || true
 chown dnstrust:dnstrust /var/lib/dnstrust/root.key
 ```
 
-### Langkah 4 — nginx + halaman laman labuh
+### Langkah 6 — config + systemd unit
 
 ```bash
-mkdir -p /var/www/lamanlabuh
-cp /root/zetdns-isp/lamanlabuh/index.html /var/www/lamanlabuh/index.html
-chown -R www-data:www-data /var/www/lamanlabuh
-chmod 755 /var/www/lamanlabuh
-chmod 644 /var/www/lamanlabuh/index.html
-
-# matikan default site bawaan supaya tidak bentrok default_server
-rm -f /etc/nginx/sites-enabled/default
-
-cp /root/zetdns-isp/config/nginx/lamanlabuh.conf /etc/nginx/sites-available/lamanlabuh
-ln -sf /etc/nginx/sites-available/lamanlabuh /etc/nginx/sites-enabled/lamanlabuh
-
-nginx -t
-systemctl restart nginx     # restart, bukan reload — default_server baru butuh restart
+cd /root/zetdns-isp
+sudo cp config/unbound/*.conf          /etc/unbound/
+sudo cp config/systemd/*.service       /etc/systemd/system/
+sudo cp config/systemd/*.timer         /etc/systemd/system/
+sudo cp config/systemd/*.path          /etc/systemd/system/
+sudo mkdir -p /etc/systemd/system/unbound-blacklist-update.timer.d
+sudo cp config/systemd/unbound-blacklist-update.timer.d/*.conf \
+        /etc/systemd/system/unbound-blacklist-update.timer.d/
+sudo cp config/default/unbound-blacklist-update /etc/default/unbound-blacklist-update
+sudo systemctl daemon-reload
 ```
 
-### Langkah 5 — arahkan domain blokir ke IP server
+### Langkah 7 — nginx + halaman laman labuh
+
+```bash
+sudo mkdir -p /var/www/lamanlabuh
+sudo cp /root/zetdns-isp/lamanlabuh/index.html /var/www/lamanlabuh/index.html
+sudo chown -R www-data:www-data /var/www/lamanlabuh
+sudo chmod 755 /var/www/lamanlabuh
+sudo chmod 644 /var/www/lamanlabuh/index.html
+
+# matikan default site bawaan supaya tidak bentrok default_server
+sudo rm -f /etc/nginx/sites-enabled/default
+
+sudo cp /root/zetdns-isp/config/nginx/lamanlabuh.conf /etc/nginx/sites-available/lamanlabuh
+sudo ln -sf /etc/nginx/sites-available/lamanlabuh /etc/nginx/sites-enabled/lamanlabuh
+
+sudo nginx -t
+sudo systemctl restart nginx     # restart, bukan reload — default_server baru butuh restart
+```
+
+### Langkah 8 — arahkan domain blokir ke IP server
 
 **Cara 1 — dashboard (disarankan):** login, buka menu **Block page**, isi IP server,
 simpan. Dashboard menulis `lamanlabuh.conf` dan reload unbound sendiri.
@@ -283,18 +316,18 @@ cat /etc/unbound/lamanlabuh.conf
 /usr/local/sbin/unbound-control reload
 ```
 
-### Langkah 6 — ACL
+### Langkah 9 — ACL
 
 Lihat [Konfigurasi ACL](#konfigurasi-acl).
 
-### Langkah 7 — tarik daftar Komdigi
+### Langkah 10 — tarik daftar Komdigi
 
 ```bash
 systemctl start unbound-blacklist-update.service
 journalctl -u unbound-blacklist-update -f
 ```
 
-### Langkah 8 — verifikasi
+### Langkah 11 — verifikasi
 
 ```bash
 dig @127.0.0.1 0--0--1-com.pages.dev A +short
@@ -603,42 +636,88 @@ bukan bug.
 
 Hal-hal yang memakan waktu saat instalasi pertama:
 
-1. **arm64 tidak didukung.** Binary hanya x86_64, tanpa source. Installer keluar
-   di `install-dns.sh` baris 62-68. Tidak ada jalan pintas — QEMU/binfmt ditolak
-   untuk produksi (lambat, mmap CDB crash).
+1. **arm64 tidak didukung.** Binary hanya x86_64, tanpa source. Tidak ada jalan
+   pintas — QEMU/binfmt ditolak untuk produksi (lambat, mmap CDB crash).
 
 2. **RPZ dan local-zone tidak cukup.** 9,75 juta domain butuh ~11,7 GB dengan RPZ,
    ~5,2 GB dengan local-zone. Hanya CDB yang muat. Jangan coba jalur lain.
 
-3. **`install.sh` butuh PTY.** Pakai `script -qec` atau ekspektasi gagal di prompt
-   password.
+3. **Dua user terpisah: `dnstrust` dan `dnstrust-admin`.** Jangan disatukan,
+   jangan `chown -R` ke salah satunya saja. Salah owner = dashboard crash dengan:
 
-4. **nginx butuh `restart`, bukan `reload`**, saat mengubah `default_server`.
-   Reload tidak mengganti vhost default.
+   ```
+   buka database metrik: unable to open database file: out of memory (14)
+   ```
 
-5. **Dashboard punya menu "Client access" untuk ACL.** Pakai itu untuk perubahan
+   **`out of memory (14)` di sini BUKAN RAM habis** — itu `SQLITE_CANTOPEN`.
+   Artinya proses `dnstrust-admin` tidak bisa membuka `metrics.db` karena
+   ownership salah. Perbaikan:
+
+   ```bash
+   chown root:dnstrust-admin /var/lib/dnstrust-admin/metrics.db*
+   chmod 640 /var/lib/dnstrust-admin/metrics.db*
+   systemctl restart dnstrust-admin
+   ```
+
+   Ownership yang benar:
+
+   | Path | Owner | Mode |
+   |---|---|---|
+   | `/var/lib/dnstrust` | `dnstrust:dnstrust` | 750 |
+   | `/var/lib/dnstrust-admin` | `root:dnstrust-admin` | 770 |
+   | `/var/lib/dnstrust-admin/metrics.db*` | `root:dnstrust-admin` | 640 |
+   | `/var/lib/dnstrust-admin/{actions,queue,backups}` | `root:dnstrust-admin` | 770 |
+
+4. **`dnstrust-control` tidak punya `reload`.** Perintah reload yang benar:
+
+   ```bash
+   /usr/local/sbin/unbound-control reload
+   ```
+
+   `dnstrust-control` hanya untuk `refresh`. Pakai yang salah = config tidak
+   diterapkan, tanpa pesan error yang jelas.
+
+5. **nginx butuh `restart`, bukan `reload`**, saat mengubah `default_server`.
+   Reload tidak mengganti vhost default — browser tetap dapat `Welcome to nginx!`.
+
+6. **Dashboard punya menu "Client access" untuk ACL.** Pakai itu untuk perubahan
    normal; edit manual `unbound.conf` hanya kalau dashboard mati. Kalau kamu
    edit manual lalu simpan dari dashboard, **perubahan manualmu bisa tertimpa** —
    dashboard menulis ulang seluruh blok `access-control` dari state internalnya.
    Backup dashboard ada di `/var/lib/dnstrust-admin/backups/`.
 
-6. **Klien harus diarahkan ke resolver.** Install di server tidak otomatis
+7. **Dashboard menulis ulang config saat kamu simpan.** Menu **Block page**,
+   **Client access**, **Local DNS records**, **Whitelist** semuanya menulis file
+   masing-masing. Setelah `install.sh` mengubah `lamanlabuh.conf`, kalau kamu
+   buka **Block page** di dashboard dan simpan, nilai manual bisa tergantikan.
+
+8. **`strings` belum tentu terinstall.** Saat memeriksa isi binary di Debian
+   minimal, `strings` bisa tidak ada (`binutils` belum terpasang). Output
+   `command not found` yang masuk ke `grep` akan **kosong**, dan kosong itu mudah
+   salah dibaca sebagai "fitur tidak ada". Selalu:
+
+   ```bash
+   command -v strings >/dev/null || apt-get install -y binutils
+   ```
+
+9. **Klien harus diarahkan ke resolver.** Install di server tidak otomatis
    mengganti DNS pelanggan. Set lewat DHCP router/PPPoE pool.
 
-7. **`resolv.conf` di LXC dikelola Proxmox.** Kalau di dalam CT terlihat penanda
-   `# --- BEGIN PVE ---`, perubahan bisa hilang saat restart. Ubah permanen dari
-   host: `pct set <vmid> --nameserver 127.0.0.1`.
+10. **`resolv.conf` di LXC dikelola Proxmox.** Kalau di dalam CT terlihat penanda
+    `# --- BEGIN PVE ---`, perubahan bisa hilang saat restart. Ubah permanen dari
+    host: `pct set <vmid> --nameserver 127.0.0.1`.
 
-8. **Dashboard menulis ulang config saat kamu simpan.** Menu **Block page**,
-   **Client access**, **Local DNS records**, **Whitelist** semuanya menulis file
-   masing-masing. Setelah `install-lamanlabuh.sh` mengubah `lamanlabuh.conf`,
-   kalau kamu buka **Block page** di dashboard dan simpan, nilai manual bisa
-   tergantikan. Backup otomatis di `/var/lib/dnstrust-admin/backups/`.
+11. **Dashboard :9080 terbuka publik dengan self-signed cert.** Taruh di belakang
+    nginx + Let's Encrypt, atau batasi firewall ke IP admin. Tidak ada rate limit.
 
-9. **Dashboard :9080 terbuka publik dengan self-signed cert.** Taruh di belakang
-   nginx + Let's Encrypt, atau batasi firewall ke IP admin.
+12. **Halaman blokir tidak andal untuk HTTPS.** Browser minta sertifikat domain
+    yang diblokir, nginx memberi sertifikat lain, dan browser menampilkan
+    "Not Secure" **sebelum** halaman muncul. Hanya HTTP yang andal.
 
-10. **Kredensial di chat/dokumen = bocor.** Ganti password root dan password
+13. **`0.0.0.0/0 allow` jangan permanen.** Server jadi open resolver, bahan DDoS
+    amplification. Maksimum 100 jaringan di dashboard.
+
+14. **Kredensial di chat/dokumen = bocor.** Ganti password root dan password
     dashboard setelah instalasi. Pakai SSH key, matikan login password.
 
 ---
@@ -684,10 +763,21 @@ Hal-hal yang memakan waktu saat instalasi pertama:
 ```
 .
 ├── README.md
-├── install-lamanlabuh.sh          # installer laman labuh + wiring DNS
-├── verify.sh                      # skrip verifikasi end-to-end
-├── bin/
-│   └── dnstrust-control            # wrapper kecil (97 B) dari instalasi nyata
+├── install.sh                     # installer utama — satu perintah
+├── verify.sh                      # verifikasi end-to-end (16 pemeriksaan)
+├── install-lamanlabuh.sh          # hanya halaman blokir (kalau DNS sudah ada)
+├── src/
+│   ├── bin/                       # binary x86_64 dari repo upstream (26 MB)
+│   │   ├── unbound                # resolver dipatch filter-database (CDB)
+│   │   ├── unbound-control
+│   │   ├── unbound-checkconf
+│   │   ├── dnstrust-admin         # dashboard :9080
+│   │   ├── blcreate               # builder CDB
+│   │   └── libcdb.so.1            # shared lib CDB
+│   └── scripts/
+│       ├── dnstrust-control       # wrapper unbound-control
+│       ├── update-blacklist.sh    # updater Komdigi
+│       └── verify-dnstrust-hot-remap
 ├── config/
 │   ├── unbound/
 │   │   ├── unbound.conf            # config utama + ACL
@@ -697,7 +787,7 @@ Hal-hal yang memakan waktu saat instalasi pertama:
 │   │   ├── module-config.conf      # respip validator iterator
 │   │   ├── safesearch.conf         # RPZ safesearch
 │   │   ├── tproxy.conf             # TPROXY (disabled default)
-│   │   └── whitelist.conf          # 56 domain whitelist
+│   │   └── whitelist.conf          # 64 domain whitelist
 │   ├── systemd/
 │   │   ├── dnstrust-unbound.service
 │   │   ├── dnstrust-admin.service
@@ -711,7 +801,7 @@ Hal-hal yang memakan waktu saat instalasi pertama:
 │   └── default/
 │       └── unbound-blacklist-update
 ├── lamanlabuh/
-│   └── index.html                  # halaman blokir KOMDIGI, CSS inline
+│   └── index.html                  # halaman blokir KOMDIGI, CSS inline (207 KB)
 └── docs/
     └── upstream-files.md           # file yang harus diambil dari repo asli
 ```
