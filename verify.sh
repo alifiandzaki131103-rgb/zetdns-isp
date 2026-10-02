@@ -197,6 +197,34 @@ if [ "$LOCAL" -eq 1 ]; then
     fi
     [ -f /var/lib/dnstrust/blacklist.db ] && \
         ok "blacklist.db: $(du -h /var/lib/dnstrust/blacklist.db | cut -f1)"
+
+    # Metrik dashboard: timer + path WAJIB aktif, kalau tidak dashboard
+    # menampilkan "Needs attention" dan semua kartu "--".
+    for u in dnstrust-admin-collect.timer dnstrust-admin-worker.path; do
+        [ -f "/etc/systemd/system/$u" ] || continue
+        if [ "$(systemctl is-active "$u" 2>/dev/null)" = "active" ]; then
+            ok "$u: active"
+        else
+            bad "$u: $(systemctl is-active "$u" 2>/dev/null)"
+            info "fix: systemctl enable --now $u   (metrik dashboard kosong tanpa ini)"
+        fi
+    done
+    ROWS="$(python3 - <<'PY' 2>/dev/null
+import sqlite3
+try:
+    c = sqlite3.connect("file:/var/lib/dnstrust-admin/metrics.db?mode=ro", uri=True)
+    print(c.execute("SELECT COUNT(*) FROM metrics_raw").fetchone()[0])
+except Exception:
+    print(-1)
+PY
+)"
+    if [ "$ROWS" -gt 1 ] 2>/dev/null; then
+        ok "metrik terkumpul: $ROWS sampel"
+    else
+        bad "metrik kosong ($ROWS sampel) — dashboard akan bilang 'Needs attention'"
+        info "fix: /usr/local/sbin/dnstrust-admin collect ; systemctl enable --now dnstrust-admin-collect.timer"
+    fi
+
     df -h / | awk 'NR==2{printf "  OK    disk root: %s terpakai dari %s (%s)\n", $3, $2, $5}'
     PASS=$((PASS+1))
 else

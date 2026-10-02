@@ -389,6 +389,28 @@ PY
         systemctl restart "$u" >>"$LOG" 2>&1 || true
     done
 
+    # Timer + path WAJIB di-enable, kalau tidak:
+    #   - dashboard bilang "Needs attention", metrik kosong ("Waiting for
+    #     historical samples"), semua kartu menampilkan "--"
+    #   - aksi dari UI tidak pernah diterapkan (worker.path yang memicunya)
+    # Keduanya adalah unit terpisah dari dnstrust-admin.service — meng-enable
+    # service utamanya saja TIDAK cukup.
+    for u in dnstrust-admin-collect.timer dnstrust-admin-worker.path; do
+        if [ -f "/etc/systemd/system/$u" ]; then
+            systemctl enable --now "$u" >>"$LOG" 2>&1 || true
+            s="$(systemctl is-active "$u" 2>/dev/null || echo unknown)"
+            if [ "$s" = "active" ]; then
+                ok "$u: active"
+            else
+                warn "$u: $s (metrik dashboard tidak akan terisi)"
+                FAILED=1
+            fi
+        fi
+    done
+
+    # isi sampel pertama sekarang, jangan tunggu timer 1 menit
+    /usr/local/sbin/dnstrust-admin collect >>"$LOG" 2>&1 || true
+
     # tunggu sampai stabil (dnstrust-admin butuh waktu buka metrics.db)
     for i in $(seq 1 20); do
         sleep 1
