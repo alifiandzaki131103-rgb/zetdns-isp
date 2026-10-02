@@ -1,0 +1,10 @@
+$TTL 128
+;$ORIGIN rpz.safesearch
+@               IN  SOA localhost.        root.localhost. (
+                1 ; serial
+                1d ; refresh
+                2h ; retry
+                4w ; expire
+                1h ; default_ttl
+                )
+                NS localhost.

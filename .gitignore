@@ -20,8 +20,13 @@ session_key*
 blacklist.db*
 trust.txt*
 trust.txt.raw
-rpz.safesearch
 *.cdb
+
+# CATATAN: rpz.safesearch JANGAN di-ignore.
+# Dia cuma ~20 KB, tapi WAJIB ada: safesearch.conf menunjuk zonefile ini.
+# Kalau hilang, unbound mati dengan "fatal error: Could not setup authority
+# zones". Sebelum di-un-ignore, file ini tidak pernah masuk repo dan instalasi
+# baru selalu gagal begitu SafeSearch dinyalakan dari dashboard.
 
 # Log & runtime
 *.log

@@ -116,10 +116,45 @@ for d in actions queue backups; do
     chown root:dnstrust-admin "/var/lib/dnstrust-admin/$d"
     chmod 770 "/var/lib/dnstrust-admin/$d"
 done
-# metrics.db milik root:dnstrust-admin, mode 640.
-# Salah owner di sini = dashboard crash dengan
+# metrics.db WAJIB ADA SEBELUM dnstrust-admin start.
+#
+# dnstrust-admin membuka DB dengan O_RDONLY (bukan O_CREAT) — dia TIDAK
+# membuatnya sendiri. Kalau hilang, crash dengan pesan menyesatkan:
 #   "buka database metrik: unable to open database file: out of memory (14)"
-# (SQLITE_CANTOPEN, BUKAN kehabisan RAM)
+# Terjemahan sebenarnya: SQLITE_CANTOPEN karena ENOENT, BUKAN kehabisan RAM.
+# Bukti strace:
+#   open("/var/lib/dnstrust-admin/metrics.db", O_RDONLY|O_NOFOLLOW) = -1 ENOENT
+#
+# Seed dengan skema persis yang diharapkan dashboard (4 tabel + WAL).
+if [ ! -s /var/lib/dnstrust-admin/metrics.db ]; then
+    python3 - <<'PY' >>"$LOG" 2>&1
+import sqlite3
+c = sqlite3.connect("/var/lib/dnstrust-admin/metrics.db")
+c.executescript("""
+CREATE TABLE IF NOT EXISTS metric_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS metrics_raw (
+    at INTEGER PRIMARY KEY,
+    sample BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS metrics_hourly (
+    at INTEGER PRIMARY KEY,
+    sample BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS metrics_daily (
+    at INTEGER PRIMARY KEY,
+    sample BLOB NOT NULL
+);
+""")
+c.execute("PRAGMA journal_mode=WAL")
+c.commit(); c.close()
+PY
+    ok "metrics.db di-seed (schema: metric_meta, metrics_raw, metrics_hourly, metrics_daily)"
+else
+    ok "metrics.db sudah ada"
+fi
 for f in metrics.db metrics.db-shm metrics.db-wal; do
     if [ -e "/var/lib/dnstrust-admin/$f" ]; then
         chown root:dnstrust-admin "/var/lib/dnstrust-admin/$f"
@@ -136,15 +171,22 @@ if [ "$SKIP_DNS" -eq 0 ]; then
     done
     install -m 0755 "$SRC_BIN/dnstrust-admin" /usr/local/sbin/dnstrust-admin
     install -m 0644 "$SRC_BIN/libcdb.so.1" /usr/local/lib/libcdb.so.1
-    install -m 0755 "$SRC_BIN/blcreate" /usr/local/bin/blcreate
+    install -m 0755 "$SRC_BIN/blcreate" /usr/local/sbin/blcreate
 
     # script pendukung
     install -m 0755 "$SRC_SCRIPTS/dnstrust-control" /usr/local/sbin/dnstrust-control
     install -m 0755 "$SRC_SCRIPTS/update-blacklist.sh" /usr/local/sbin/update-dnstrust-blacklist
     install -m 0755 "$SRC_SCRIPTS/verify-dnstrust-hot-remap" /usr/local/sbin/verify-dnstrust-hot-remap
 
+    # WAJIB: /usr/local/libexec/dnstrust-unbound
+    # update-dnstrust-blacklist memanggil ini untuk hook refresh ("runuser: failed to
+    # execute /usr/local/libexec/dnstrust-unbound: No such file or directory").
+    # Kalau hilang, updater gagal dengan "rollback unavailable: refresh failed".
+    install -d -m 0755 /usr/local/libexec
+    install -m 0755 "$SRC_SCRIPTS/dnstrust-unbound" /usr/local/libexec/dnstrust-unbound
+
     ldconfig
-    ok "6 binary + 3 script terpasang"
+    ok "6 binary + 4 script terpasang (termasuk libexec/dnstrust-unbound)"
 
     # verifikasi patch CDB benar-benar ada
     if strings /usr/local/sbin/unbound 2>/dev/null | grep -q filter-database; then
@@ -175,12 +217,40 @@ fi
 # ---------- 7. config ----------
 if [ "$SKIP_DNS" -eq 0 ]; then
     step 6/9 "Pasang config unbound & systemd"
-    for f in "$SCRIPT_DIR"/config/unbound/*.conf; do
+    # SEMUA file di config/unbound, bukan cuma *.conf.
+    # rpz.safesearch TIDAK berekstensi .conf — kalau dilewatkan, safesearch.conf
+    # menunjuk zonefile yang tidak ada, dan unbound mati dengan
+    # "fatal error: Could not setup authority zones" (restart loop).
+    for f in "$SCRIPT_DIR"/config/unbound/*; do
+        [ -f "$f" ] || continue
         n="$(basename "$f")"
         bk "/etc/unbound/$n"
         install -m 0644 "$f" "/etc/unbound/$n"
     done
-    ok "$(ls "$SCRIPT_DIR"/config/unbound/*.conf | wc -l) config unbound"
+    ok "$(ls -1 "$SCRIPT_DIR"/config/unbound/ | wc -l) file config unbound"
+
+    # rpz.safesearch harus ada SEBELUM dashboard boleh menyalakan SafeSearch.
+    # Kalau tidak ada, buat zone kosong yang valid (SOA + NS) sebagai jaring
+    # pengaman supaya dashboard tidak bisa mematikan unbound.
+    RPZ=/etc/unbound/rpz.safesearch
+    if [ ! -s "$RPZ" ]; then
+        cat > "$RPZ" <<'RPZEOF'
+$TTL 128
+;$ORIGIN rpz.safesearch
+@               IN  SOA localhost.        root.localhost. (
+                1 ; serial
+                1d ; refresh
+                2h ; retry
+                4w ; expire
+                1h ; default_ttl
+                )
+                NS localhost.
+RPZEOF
+        warn "rpz.safesearch dibuat kosong (SafeSearch belum punya entri)"
+    fi
+    chown root:dnstrust-admin "$RPZ" 2>/dev/null || true
+    chmod 644 "$RPZ"
+    ok "rpz.safesearch siap ($(stat -c%s "$RPZ") B)"
 
     # arahkan domain blokir ke IP ini
     bk /etc/unbound/lamanlabuh.conf
@@ -256,21 +326,34 @@ print(f"pbkdf2-sha256$310000${b64(salt)}${b64(dk)}")
 PY
 )"
         CFG=/etc/dnstrust-admin/config.json
-        if [ -f "$CFG" ]; then
+        # dnstrust-admin TIDAK membuat config.json sendiri. Tanpa file ini dia
+        # langsung crash: "open /etc/dnstrust-admin/config.json: no such file
+        # or directory" lalu restart loop. Wajib dibuat dari template.
+        if [ ! -s "$CFG" ]; then
+            TPL="$SCRIPT_DIR/config/dnstrust-admin/config.json.template"
+            [ -s "$TPL" ] || die "template config.json tidak ada: $TPL"
+            install -o root -g dnstrust-admin -m 0640 "$TPL" "$CFG"
+            ok "config.json dibuat dari template"
+        else
             bk "$CFG"
-            python3 - "$CFG" "$HASH" <<'PY'
-import json, sys
+        fi
+        python3 - "$CFG" "$HASH" <<'PY'
+import json, secrets, base64, sys
 p, h = sys.argv[1], sys.argv[2]
 c = json.load(open(p))
 c["password_hash"] = h
+# session_key wajib acak per instalasi; template memakai placeholder
+sk = c.get("session_key", "")
+if not sk or sk.startswith("SET_"):
+    c["session_key"] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
 json.dump(c, open(p, "w"), indent=2)
 PY
-            ok "password dashboard diperbarui"
-        else
-            warn "config.json belum ada — password di-set saat dnstrust-admin start"
-        fi
+        chown root:dnstrust-admin "$CFG"
+        chmod 0640 "$CFG"
+        ok "password dashboard + session_key di-set"
     else
-        warn "tidak ada --dashboard-password; pakai password default installer"
+        warn "tidak ada --dashboard-password; dashboard pakai hash placeholder (tidak bisa login)"
+        info "jalankan ulang: sudo ./install.sh --dashboard-password 'PASSWORD'"
     fi
 
     systemctl disable --now systemd-resolved 2>/dev/null || true
