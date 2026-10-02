@@ -315,6 +315,31 @@ if [ "$SKIP_DNS" -eq 0 ]; then
     step 8/9 "Password dashboard & start service"
     if [ -n "$DASH_PW" ]; then
         [ ${#DASH_PW} -ge 12 ] || die "password dashboard minimal 12 karakter."
+
+        # Sertifikat self-signed untuk HTTPS.
+        # PENTING: kalau config.json menunjuk cert yang tidak ada, dnstrust-admin
+        # crash: "open /etc/dnstrust-admin/tls/server.crt: no such file or
+        # directory". Dan tanpa cert, dashboard cuma HTTP -- akses https://<ip>:9080
+        # gagal dengan code=000 (tidak ada TLS listener), mudah disalahartikan
+        # sebagai firewall.
+        TLS=/etc/dnstrust-admin/tls
+        if [ ! -s "$TLS/server.crt" ] || [ ! -s "$TLS/server.key" ]; then
+            command -v openssl >/dev/null || apt-get install -y openssl >>"$LOG" 2>&1 || \
+                die "openssl diperlukan untuk HTTPS dashboard"
+            install -d -o root -g dnstrust-admin -m 0750 "$TLS"
+            # SAN wajib memuat IP ini, kalau tidak browser tolak tanpa opsi paksa
+            openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+                -keyout "$TLS/server.key" -out "$TLS/server.crt" \
+                -subj "/CN=dns-admin" \
+                -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:$BLOCK_IP" \
+                >>"$LOG" 2>&1 || die "gagal membuat sertifikat TLS"
+            chown root:dnstrust-admin "$TLS/server.crt" "$TLS/server.key"
+            chmod 644 "$TLS/server.crt"; chmod 640 "$TLS/server.key"
+            ok "sertifikat TLS dibuat (CN=dns-admin, SAN 127.0.0.1 + $BLOCK_IP)"
+        else
+            ok "sertifikat TLS sudah ada"
+        fi
+
         # hash pbkdf2-sha256 sesuai format dnstrust-admin
         HASH="$(python3 - "$DASH_PW" <<'PY'
 import hashlib, base64, secrets, sys
