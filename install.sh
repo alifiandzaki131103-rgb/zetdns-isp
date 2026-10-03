@@ -242,6 +242,8 @@ if [ "$SKIP_DNS" -eq 0 ]; then
     for f in "$SCRIPT_DIR"/config/unbound/*; do
         [ -f "$f" ] || continue
         n="$(basename "$f")"
+        # source policy milik dashboard, bukan zonefile unbound
+        case "$n" in *.source) continue ;; esac
         bk "/etc/unbound/$n"
         install -m 0644 "$f" "/etc/unbound/$n"
     done
@@ -269,6 +271,24 @@ RPZEOF
     chown root:dnstrust-admin "$RPZ" 2>/dev/null || true
     chmod 644 "$RPZ"
     ok "rpz.safesearch siap ($(stat -c%s "$RPZ") B)"
+
+    # Source policy (google/bing/duckduckgo/yandex) WAJIB di
+    # /var/lib/dnstrust-admin/rpz.safesearch.source. Dashboard Apply
+    # SafeSearch validasi tiap engine yang dicentang punya komentar
+    # "; force <engine> safesearch" + rewrite. Stub SOA di zonefile
+    # TIDAK cukup — error:
+    #   source RPZ SafeSearch tidak memiliki policy untuk bing
+    # Pola upstream install-dashboard.sh: salin artifact kalau source
+    # belum berisi "; force .* safesearch".
+    SRC_DST=/var/lib/dnstrust-admin/rpz.safesearch.source
+    SRC_REPO="$SCRIPT_DIR/config/dnstrust-admin/rpz.safesearch.source"
+    if ! grep -q '^; force .* safesearch' "$SRC_DST" 2>/dev/null; then
+        [ -s "$SRC_REPO" ] || die "artifact hilang: $SRC_REPO"
+        install -o root -g dnstrust-admin -m 0640 "$SRC_REPO" "$SRC_DST"
+        ok "rpz.safesearch.source ($(wc -l < "$SRC_DST") baris, policy bing/google/ddg/yandex)"
+    else
+        ok "rpz.safesearch.source sudah berisi policy"
+    fi
 
     # arahkan domain blokir ke IP ini
     bk /etc/unbound/lamanlabuh.conf
