@@ -210,6 +210,24 @@ if [ "$SKIP_DNS" -eq 0 ]; then
     fi
     [ -s /var/lib/dnstrust/root.key ] && ok "root.key ada" || warn "root.key kosong"
     chown dnstrust:dnstrust /var/lib/dnstrust/root.key 2>/dev/null || true
+
+    # Dummy CDB WAJIB ada SEBELUM unbound start. Tanpa file ini unbound crash:
+    #   error: cannot open filter-database /var/lib/dnstrust/blacklist.db
+    #   fatal error: Could not initialize main thread
+    # lalu Restart=on-failure tiap 2 detik. Updater unit Requires=unbound, jadi
+    # tiap restart unbound mengirim SIGTERM ke updater (exit 143) — CDB Komdigi
+    # tidak pernah selesai diunduh. Pola upstream install-dns.sh: seed 1 domain.
+    if [ ! -s /var/lib/dnstrust/blacklist.db ]; then
+        printf '%s\n' seed.invalid > /var/lib/dnstrust/trust.txt
+        ( cd /var/lib/dnstrust && /usr/local/sbin/blcreate < trust.txt ) >>"$LOG" 2>&1 \
+            || die "gagal seed dummy blacklist.db (blcreate)"
+        chown dnstrust:dnstrust /var/lib/dnstrust/trust.txt /var/lib/dnstrust/blacklist.db
+        chmod 0644 /var/lib/dnstrust/blacklist.db
+        ok "dummy blacklist.db ($(stat -c%s /var/lib/dnstrust/blacklist.db) B) — unbound bisa start"
+        warn "ini BUKAN daftar Komdigi. Wajib: systemctl start unbound-blacklist-update.service"
+    else
+        ok "blacklist.db sudah ada ($(du -h /var/lib/dnstrust/blacklist.db | cut -f1))"
+    fi
 else
     step 5/9 "DNSSEC trust anchor"; warn "dilewati"
 fi
@@ -371,6 +389,12 @@ c["password_hash"] = h
 sk = c.get("session_key", "")
 if not sk or sk.startswith("SET_"):
     c["session_key"] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+# template tls_* kosong. Cert sudah dibuat di atas — tanpa path ini dashboard
+# listen HTTP saja, https://:9080 = code=000 (bukan firewall).
+if not c.get("tls_cert_file"):
+    c["tls_cert_file"] = "/etc/dnstrust-admin/tls/server.crt"
+if not c.get("tls_key_file"):
+    c["tls_key_file"] = "/etc/dnstrust-admin/tls/server.key"
 json.dump(c, open(p, "w"), indent=2)
 PY
         chown root:dnstrust-admin "$CFG"
@@ -446,9 +470,14 @@ PY
     if [ "$FAILED" -ne 0 ]; then
         echo
         echo "  \033[31mSERVICE GAGAL JALAN.\033[0m Penyebab paling sering:" >&2
-        echo "    'buka database metrik: unable to open database file: out of memory (14)'" >&2
-        echo "    -> itu SQLITE_CANTOPEN, artinya OWNERSHIP file salah, bukan RAM habis." >&2
-        echo "    -> perbaiki:" >&2
+        echo "    1. 'cannot open filter-database ... blacklist.db'" >&2
+        echo "       -> dummy CDB belum ada. Seed lalu start updater:" >&2
+        echo "         printf seed.invalid > /var/lib/dnstrust/trust.txt" >&2
+        echo "         (cd /var/lib/dnstrust && blcreate < trust.txt)" >&2
+        echo "         systemctl restart dnstrust-unbound" >&2
+        echo "         systemctl start unbound-blacklist-update.service" >&2
+        echo "    2. 'buka database metrik: ... out of memory (14)'" >&2
+        echo "       -> SQLITE_CANTOPEN, OWNERSHIP salah, bukan RAM habis:" >&2
         echo "         chown root:dnstrust-admin /var/lib/dnstrust-admin/metrics.db*" >&2
         echo "         chmod 640 /var/lib/dnstrust-admin/metrics.db*" >&2
         echo "         systemctl restart dnstrust-admin" >&2

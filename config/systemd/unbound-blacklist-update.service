@@ -1,8 +1,12 @@
 [Unit]
 Description=Update DNS Trust Komdigi blacklist
-After=network-online.target dnstrust-unbound.service
+After=network-online.target
 Wants=network-online.target
-Requires=dnstrust-unbound.service
+# JANGAN Requires=dnstrust-unbound. Restart unbound (Restart=on-failure 2s,
+# atau toggle TPROXY/num-threads) mengirim SIGTERM ke updater yang sedang
+# unduh CDB ~70s (exit 143), daftar Komdigi tidak pernah selesai. After=
+# cukup: jalankan sesudah unbound kalau unbound sudah up, jangan bunuh
+# unduhan kalau unbound restart.
 
 [Service]
 Type=oneshot
