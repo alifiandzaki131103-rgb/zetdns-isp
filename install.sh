@@ -41,6 +41,10 @@ ok()    { printf '    \033[32mOK\033[0m %s\n' "$1"; }
 warn()  { printf '    \033[33m!\033[0m %s\n' "$1"; }
 die()   { printf '\n\033[31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 
+mkdir -p "$BACKUP_DIR"
+bk() { [ -e "$1" ] || return 0; local t="$BACKUP_DIR/$(echo "$1" | tr '/' '_').before-install"
+       [ -e "$t" ] || { cp -a "$1" "$t"; echo "    backup: $1"; }; }
+
 echo "=== ZetDNS installer ==="
 echo "  sumber   : $SCRIPT_DIR"
 echo "  log      : $LOG"
@@ -55,6 +59,35 @@ case "$(uname -m)" in
      Tidak ada source yang dirilis untuk arch lain.
      Lihat README bagian Pitfalls nomor 1." ;;
 esac
+
+# ---------- 0b. timezone ----------
+# WAJIB paling awal. CT baru sering masih UTC, sehingga:
+#   - journal/log updater bergeser 7 jam ("LAST SOURCE CHECK" di dashboard salah)
+#   - NextElapseUSecRealtime / jadwal timer meleset
+#   - masa berlaku sertifikat TLS tampak beda
+# Setel sebelum paket/service apa pun dijalankan.
+step 0/9 "Timezone"
+if command -v timedatectl >/dev/null 2>&1; then
+    CUR_TZ="$(timedatectl show -p Timezone --value 2>/dev/null || echo '')"
+    if [ "$CUR_TZ" != "Asia/Jakarta" ]; then
+        timedatectl set-timezone Asia/Jakarta >>"$LOG" 2>&1 \
+            || die "gagal set timezone Asia/Jakarta"
+        ok "timezone: ${CUR_TZ:-tidak diketahui} -> Asia/Jakarta"
+    else
+        ok "timezone: Asia/Jakarta (sudah benar)"
+    fi
+    # tanpa tzdata, /etc/localtime tidak bisa di-resolve
+    [ -e /usr/share/zoneinfo/Asia/Jakarta ] || \
+        warn "tzdata Asia/Jakarta hilang; pasang paket tzdata"
+else
+    # fallback container tanpa systemd
+    bk /etc/localtime
+    ln -sf /usr/share/zoneinfo/Asia/Jakarta /etc/localtime || \
+        die "gagal menulis /etc/localtime"
+    echo "Asia/Jakarta" > /etc/timezone
+    ok "timezone: Asia/Jakarta (via /etc/localtime)"
+fi
+date "+    sekarang: %F %T %Z (%z)"
 
 # ---------- 1. cek file sumber ----------
 step 1/9 "Cek file sumber"
@@ -85,10 +118,6 @@ if [ -z "$BLOCK_IP" ]; then
     [ -n "$BLOCK_IP" ] || BLOCK_IP="$(ip -4 addr show scope global | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}')"
 fi
 [ -n "$BLOCK_IP" ] || die "tidak bisa deteksi IP. Pakai --block-ip <IP>."
-
-mkdir -p "$BACKUP_DIR"
-bk() { [ -e "$1" ] || return 0; local t="$BACKUP_DIR/$(echo "$1" | tr '/' '_').before-install"
-       [ -e "$t" ] || { cp -a "$1" "$t"; echo "    backup: $1"; }; }
 
 # ---------- 4. user & direktori ----------
 step 3/9 "User & direktori"

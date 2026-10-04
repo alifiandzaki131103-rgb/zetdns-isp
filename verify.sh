@@ -41,6 +41,21 @@ digA() {   # digA <domain> -> cetak IP pertama atau kosong; DNSRC=NOERROR/NXDOMA
 echo "=== Verifikasi ZetDNS (target: $TARGET) ==="
 echo
 
+# ---------- 0. timezone ----------
+# Salah TZ = log, jadwal timer, dan "LAST SOURCE CHECK" di dashboard
+# bergeser (UTC vs WIB). Ini penyebab nyata insiden 2026-10-04.
+if [ "$LOCAL" -eq 1 ]; then
+    echo "[0] Timezone"
+    TZ_NOW="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)"
+    if [ "$TZ_NOW" = "Asia/Jakarta" ]; then
+        ok "timezone: Asia/Jakarta ($(date '+%F %T %Z'))"
+    else
+        bad "timezone: ${TZ_NOW:-tidak diketahui} — harus Asia/Jakarta"
+        info "perbaiki: timedatectl set-timezone Asia/Jakarta"
+    fi
+    echo
+fi
+
 # ---------- 1. service ----------
 echo "[1] Service"
 if [ "$LOCAL" -eq 1 ]; then
