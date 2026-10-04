@@ -268,11 +268,27 @@ if [ "$SKIP_DNS" -eq 0 ]; then
     # rpz.safesearch TIDAK berekstensi .conf — kalau dilewatkan, safesearch.conf
     # menunjuk zonefile yang tidak ada, dan unbound mati dengan
     # "fatal error: Could not setup authority zones" (restart loop).
+    # ACL klien (acl.conf) dan unbound.conf TIDAK PERNAH ditimpa kalau sudah
+    # ada. Dua alasan:
+    #   1. Dashboard "Client access" menulis ACL langsung ke file itu. Menimpa
+    #      = menghapus prefix pelanggan tanpa peringatan.
+    #   2. Repo ini tidak menyimpan prefix ISP, jadi salinan dari repo akan
+    #      MENGURANGI ACL produksi, bukan menambah.
+    # Kalau belum ada (instalasi baru), file dari repo dipasang: ACL-nya cuma
+    # jaringan privat + refuse, itu titik awal yang benar.
+    PRESERVE="acl.conf unbound.conf"
     for f in "$SCRIPT_DIR"/config/unbound/*; do
         [ -f "$f" ] || continue
         n="$(basename "$f")"
         # source policy milik dashboard, bukan zonefile unbound
         case "$n" in *.source) continue ;; esac
+        if [ -e "/etc/unbound/$n" ]; then
+            case " $PRESERVE " in
+                *" $n "*)
+                    ok "$n dipertahankan (sudah ada, tidak ditimpa)"
+                    continue ;;
+            esac
+        fi
         bk "/etc/unbound/$n"
         install -m 0644 "$f" "/etc/unbound/$n"
     done

@@ -103,6 +103,24 @@ else
 
 # ---------- 2. ACL ----------
 echo "[2] ACL terjangkau"
+if [ "$LOCAL" -eq 1 ]; then
+    # ACL tinggal di /etc/unbound/acl.conf (di-include unbound.conf), BUKAN
+    # di unbound.conf lagi. Kalau masih di unbound.conf, migrasi belum jalan.
+    ACL_ALLOW=0
+    for f in /etc/unbound/acl.conf /etc/unbound/unbound.conf; do
+        [ -f "$f" ] || continue
+        ACL_ALLOW=$((ACL_ALLOW + $(grep -c "access-control:.*allow" "$f" 2>/dev/null || echo 0)))
+    done
+    if [ ! -e /etc/unbound/acl.conf ]; then
+        bad "acl.conf belum ada — ACL masih menempel di unbound.conf (migrasi belum jalan)"
+        info "install.sh versi baru: ACL di-include dari /etc/unbound/acl.conf"
+    elif [ "$ACL_ALLOW" -gt 5 ]; then
+        ok "ACL: $ACL_ALLOW jaringan allow (acl.conf + unbound.conf)"
+    else
+        bad "ACL hanya $ACL_ALLOW jaringan allow — pelanggan mungkin tidak masuk"
+        info "tambah prefix di dashboard menu 'Client access'"
+    fi
+fi
 WHOAMI="$(digA whoami.akamai.net)"
 if [ -n "$WHOAMI" ]; then
     ok "query diterima (status=$DNSRC): whoami.akamai.net -> $WHOAMI"
