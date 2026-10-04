@@ -51,8 +51,8 @@ echo "  log      : $LOG"
 echo "  tipe     : $(uname -m)"
 echo
 
-# ---------- 0. cek arsitektur ----------
-step 0/9 "Cek arsitektur"
+# ---------- 0a. cek arsitektur ----------
+step 0a "Cek arsitektur"
 case "$(uname -m)" in
     x86_64|amd64) ok "x86_64" ;;
     *) die "binary hanya x86_64. Arsitekturmu: $(uname -m).
@@ -66,7 +66,7 @@ esac
 #   - NextElapseUSecRealtime / jadwal timer meleset
 #   - masa berlaku sertifikat TLS tampak beda
 # Setel sebelum paket/service apa pun dijalankan.
-step 0/9 "Timezone"
+step 0b "Timezone"
 if command -v timedatectl >/dev/null 2>&1; then
     CUR_TZ="$(timedatectl show -p Timezone --value 2>/dev/null || echo '')"
     if [ "$CUR_TZ" != "Asia/Jakarta" ]; then
