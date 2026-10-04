@@ -109,7 +109,10 @@ if [ "$LOCAL" -eq 1 ]; then
     ACL_ALLOW=0
     for f in /etc/unbound/acl.conf /etc/unbound/unbound.conf; do
         [ -f "$f" ] || continue
-        ACL_ALLOW=$((ACL_ALLOW + $(grep -c "access-control:.*allow" "$f" 2>/dev/null || echo 0)))
+        # grep -c mencetak "0" DAN exit 1 kalau tidak ada match; `|| echo 0`
+        # menambah baris kedua sehingga aritmetika jadi "0\n0" -> syntax error.
+        n="$(grep -c "access-control:.*allow" "$f" 2>/dev/null | head -1 | tr -cd '0-9')"
+        ACL_ALLOW=$((ACL_ALLOW + ${n:-0}))
     done
     if [ ! -e /etc/unbound/acl.conf ]; then
         bad "acl.conf belum ada — ACL masih menempel di unbound.conf (migrasi belum jalan)"
